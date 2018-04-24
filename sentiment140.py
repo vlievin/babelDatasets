@@ -20,10 +20,9 @@ _DIGIT_RE = re.compile("\d")
 _SEPARATOR_RE = re.compile("[?!.]")
 _USERNAME_RE = re.compile("(?<=^|(?<=[^a-zA-Z0-9-_\.]))@([A-Za-z]+[A-Za-z0-9]+)")
 _URL_RE = re.compile("http\S+")
-_VOCAB_PATH_ = "vocab.dat"
-_BLOCK_SIZE = 5000
-_TRAIN_BLOCKS_PATH = "training_blocks"
-_TEST_BLOCKS_PATH = "testing_blocks"
+_VOCAB_PATH = "vocab.dat"
+_TRAIN_SENTENCES_PATH = "train_sentences.txt"
+_TEST_SENTENCES_PATH = "test_sentences.txt"
 _PAD_SYMBOL = '*'
 
 
@@ -58,7 +57,7 @@ def clean_sentence(sentence):
     #sentence = re.sub(_DIGIT_RE,"0",sentence) # digits to zeros
     sentence = re.sub(_USERNAME_RE,"@user", sentence)
     sentence = re.sub(_URL_RE,"@url", sentence)
-    sentence = re.sub('[^a-zA-Z.(-@:;#,.\)\(?!=$^ )]+', '', sentence)
+    sentence = re.sub('[^a-zA-Z.(-@:;#,.\)\(?!=$^\' )]+', '', sentence)
     #sentence = re.sub("[\(\[].*?[\)\]]|&#00|\x1f", " ", sentence) # remove text in parenthesis and special character
     #sentence = re.sub('^W+\,|[%&()*\"\:\;\[\]\-\#\\\_<>\|\`\^\/\=\{\}\~€$@\+]',' ', sentence )
     #sentence = re.sub("[ ]{2,}" , " ", sentence)
@@ -84,49 +83,23 @@ def loadData(data_dir, train):
     df['text'] = df['text'].map(lambda x: clean_sentence(x))
     return df
 
-def getVoc(data_dir):
-    voc_path = os.path.join(data_dir, _VOCAB_PATH_)
-    if not os.path.exists(voc_path):
-        sentences = list(loadData(data_dir, train=False)['text'].values) + list(loadData(data_dir, train=True)['text'].values )
-        vocab = getVocabularyFromSentences(sentences)
-        with open(os.path.join(data_dir,_VOCAB_PATH_), 'w') as vocab_file:
-            [vocab_file.write("%s\n" % item) for item in vocab]
-    return open(voc_path).read().splitlines()
-
-def writeBlocks(sentences, out_directory, block_size):
-    """
-    Write a list of sentences into blocks of equal length as text files names as 'block-<index>.txt'
-    Args:
-        sentences (iter): iterator of sentences
-        out_directory (str): path to the directoy to write the data to
-    """
-    if not os.path.exists(out_directory):
-        os.makedirs(out_directory)
-    # write blocks
-    index = 0
-    while True:
-        block = list(itertools.islice(sentences,block_size))
-        if len(block) < block_size:
-            break
-        block_path = 'block-'+str(index)+'.txt'
-        block_path = os.path.join(out_directory , block_path)
-        with open(block_path, 'w') as file:
-            [file.write("%s\n" % item) for item in block]
-        index += 1
+def writeVocab(vocab,vocab_path):
+    with open(vocab_path, 'w') as vocab_file:
+        [vocab_file.write("%s\n" % item) for item in vocab]
     
-def getBlockPaths(directory):
-    """
-    get the list of paths from the target directory
-    """
-    return [ os.path.join(directory,u) for u in os.listdir(directory) if 'block-' == u[:6]]
+def readVocab(vocab_path):
+    return open(vocab_path).read().splitlines()
 
-def readLinesFromFile(path):
-    """
-    get generator from text file
-    """
-    f = open(path)
+def writeEncodedSentences(sentences,filename):
+    with open(filename, 'w') as f:
+        for s in sentences:
+            for _string in s:
+                f.write(str(_string)+' ')
+            f.write('\n')
+def readEncodedSentences(filename):
+    f = open(filename)
     for l in f:
-        yield l.replace('\n',"")
+        yield [ eval(x) for x in l.replace('\n',"").split(' ') if len(x)]
         
 def shuffleGenerator(L):
     """ 
@@ -142,51 +115,25 @@ class Sentiment140(Dataset):
     """
     def __init__(self, data_directory, train=True, train_ratio = 0.95, max_sentence_size=128):
         # download and load data 
-        blocks_directory = _TRAIN_BLOCKS_PATH #if train else _TEST_BLOCKS_PATH
-        blocks_directory = os.path.join(data_directory,blocks_directory)
-        if not os.path.exists(blocks_directory):
+        train_sentences_path = os.path.join(data_directory,_TRAIN_SENTENCES_PATH)
+        test_sentences_path = os.path.join(data_directory,_TRAIN_SENTENCES_PATH)
+        vocab_path = os.path.join(data_directory,_VOCAB_PATH)
+        if not os.path.exists(train_sentences_path) or not os.path.exists(test_sentences_path) or not os.path.exists(vocab_path):
             sentences = loadData(data_directory,train)['text'].values
             sentences = [s for s in sentences if len(s) < max_sentence_size]
-            writeBlocks(iter(sentences), blocks_directory, block_size = min(_BLOCK_SIZE,len(sentences))) 
-        self.vocab = getVoc(data_directory)
+            vocab = getVocabularyFromSentences(sentences)
+            writeVocab(vocab,vocab_path)
+            encoderDecoder = EncoderDecoder(vocab, _PAD_SYMBOL)
+            sentences = [encoderDecoder.encode(s) for s in sentences]
+            writeEncodedSentences(sentences[:int(train_ratio*len(sentences))], train_sentences_path)
+            writeEncodedSentences(sentences[int(train_ratio*len(sentences)):], test_sentences_path)
         # load objects
-        self.encoderDecoder = EncoderDecoder(self.vocab, _PAD_SYMBOL)
-        self.blockPaths = list(getBlockPaths(blocks_directory))
-        if train:
-            self.blockPaths = self.blockPaths[:int(train_ratio*len(self.blockPaths))]
-        else:
-            self.blockPaths = self.blockPaths[int(train_ratio*len(self.blockPaths)):]
-        self.current_blockPaths = shuffleGenerator(copy.copy(self.blockPaths))
-        self.current_sentences = shuffleGenerator(readLinesFromFile(next(iter(self.current_blockPaths))))
-
-    def getNextSentence(self):
-        sentence = next(iter(self.current_sentences), None)
-        if sentence is None:
-            next_block = next(iter(self.current_blockPaths), None)
-            if next_block is None:
-                self.current_blockPaths = shuffleGenerator(copy.copy(self.blockPaths))
-                next_block = next(iter(self.current_blockPaths), None)
-            self.current_sentences = shuffleGenerator(readLinesFromFile(next(iter(self.current_blockPaths))))
-            sentence = next(iter(self.current_sentences), None)
-        return sentence
+        self.encoderDecoder = EncoderDecoder(readVocab(vocab_path), _PAD_SYMBOL)
+        sentences_path = train_sentences_path if train else test_sentences_path
+        self.sentences = list(readEncodedSentences(sentences_path))
     
     def __len__(self):
-        return _BLOCK_SIZE * len(self.blockPaths)
-
-    def getNextSentence(self):
-        sentence = next(iter(self.current_sentences), None)
-        if sentence is None:
-            next_block = next(iter(self.current_blockPaths), None)
-            if next_block is None:
-                self.current_blockPaths = shuffleGenerator(copy.copy(self.blockPaths))
-                next_block = next(iter(self.current_blockPaths), None)
-            self.current_sentences = shuffleGenerator(readLinesFromFile(next(iter(self.current_blockPaths))))
-            sentence = next(iter(self.current_sentences), None)
-        return sentence
+        return len(self.sentences)
             
     def __getitem__(self, idx):
-        sentence = self.getNextSentence()
-        #if self.min_sentence_size is not None:
-        #    while not (len(sentence) >= self.min_sentence_size and len(sentence) <= self.max_sentence_size):
-        #        sentence = self.getNextSentence()
-        return self.encoderDecoder.encode(sentence)
+        return self.sentences[idx]
