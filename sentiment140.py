@@ -116,7 +116,7 @@ class Sentiment140(Dataset):
     def __init__(self, data_directory, train=True, train_ratio = 0.95, max_sentence_size=128):
         # download and load data 
         train_sentences_path = os.path.join(data_directory,_TRAIN_SENTENCES_PATH)
-        test_sentences_path = os.path.join(data_directory,_TRAIN_SENTENCES_PATH)
+        test_sentences_path = os.path.join(data_directory,_TEST_SENTENCES_PATH)
         vocab_path = os.path.join(data_directory,_VOCAB_PATH)
         if not os.path.exists(train_sentences_path) or not os.path.exists(test_sentences_path) or not os.path.exists(vocab_path):
             sentences = loadData(data_directory,train)['text'].values
@@ -125,12 +125,18 @@ class Sentiment140(Dataset):
             writeVocab(vocab,vocab_path)
             encoderDecoder = EncoderDecoder(vocab, _PAD_SYMBOL)
             sentences = [encoderDecoder.encode(s) for s in sentences]
-            writeEncodedSentences(sentences[:int(train_ratio*len(sentences))], train_sentences_path)
-            writeEncodedSentences(sentences[int(train_ratio*len(sentences)):], test_sentences_path)
+            print('# sentences:', len(sentences))
+            train_sentences = sentences[:int(train_ratio*len(sentences))]
+            test_sentences = sentences[int(train_ratio*len(sentences)):]
+            print('# train sentences:',len(train_sentences))
+            print('# test_sentences sentences:',len(test_sentences))
+            writeEncodedSentences(train_sentences, train_sentences_path)
+            writeEncodedSentences(test_sentences, test_sentences_path)
         # load objects
         self.encoderDecoder = EncoderDecoder(readVocab(vocab_path), _PAD_SYMBOL)
         sentences_path = train_sentences_path if train else test_sentences_path
         self.sentences = list(readEncodedSentences(sentences_path))
+        print("# N sents:", len(self.sentences), " train:", train , " sentences_path:", sentences_path)
     
     def __len__(self):
         return len(self.sentences)
