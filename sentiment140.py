@@ -5,6 +5,7 @@ import wget
 import re
 import os 
 import itertools
+from collections import Counter
 from random import shuffle
 import copy
 import gzip
@@ -113,23 +114,40 @@ class Sentiment140(Dataset):
     """
     Twitter Sentiment140 Dataset
     """
-    def __init__(self, data_directory, train=True, train_ratio = 0.95, max_sentence_size=128):
-        # download and load data 
+    def __init__(self, data_directory, train=True, n_sentences_train = 1000000, max_sentence_size=128, word_freq_min=1):
+        """
+        data_directory (str): path to directory where the data will be stored
+        train (bool): training if true
+        n_sentences_train (int): number of sentences for the training set
+        max_sentence_size (int): maximum number of characters for each sentence
+        word_freq_min (int): sentences with words occuring less than this value in the corpus are filtered out
+        """
         train_sentences_path = os.path.join(data_directory,_TRAIN_SENTENCES_PATH)
         test_sentences_path = os.path.join(data_directory,_TEST_SENTENCES_PATH)
         vocab_path = os.path.join(data_directory,_VOCAB_PATH)
         if not os.path.exists(train_sentences_path) or not os.path.exists(test_sentences_path) or not os.path.exists(vocab_path):
-            sentences = loadData(data_directory,train)['text'].values
-            sentences = [s for s in sentences if len(s) < max_sentence_size]
+            # get data
+            sentences = loadData(data_directory,train=True)
+            # filter by length
+            sentences['lenght'] = sentences['text'].map(len)
+            sentences =  sentences[ sentences['lenght'] < max_sentence_size]
+            # filter non frequent
+            all_words = (word for sentence in sentences['text'].values for word in sentence.split())
+            freqs = Counter(all_words)
+            sentences['freq_min'] = sentences['text'].map(lambda x: min([freqs[xx] for xx in x.split()]))
+            sentences = sentences[sentences['freq_min']>word_freq_min]['text'].values
+            # get vocabulary and write
             vocab = getVocabularyFromSentences(sentences)
             writeVocab(vocab,vocab_path)
+            # encode sentences
             encoderDecoder = EncoderDecoder(vocab, _PAD_SYMBOL)
             sentences = [encoderDecoder.encode(s) for s in sentences]
             print('# sentences:', len(sentences))
-            train_sentences = sentences[:int(train_ratio*len(sentences))]
-            test_sentences = sentences[int(train_ratio*len(sentences)):]
+            train_sentences = sentences[:n_sentences_train]
+            test_sentences = sentences[n_sentences_train:]
             print('# train sentences:',len(train_sentences))
             print('# test_sentences sentences:',len(test_sentences))
+            assert len(test_sentences) > 0
             writeEncodedSentences(train_sentences, train_sentences_path)
             writeEncodedSentences(test_sentences, test_sentences_path)
         # load objects
